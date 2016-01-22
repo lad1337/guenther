@@ -2,101 +2,145 @@ from argparse import ArgumentParser
 from glob import glob
 import io
 import logging
+from pathlib import Path
 
+from attrdict import AttrDict
 from lafayette import Lafayette
-import pyaudio
-import numpy as np
-
 import speech_recognition as sr
 from speech_recognition import AudioData
 
 from . import stuff
+from . import audio
 from .config import Config
+from .config import configure_parser
+
+logger = logging.getLogger('guenther')
+
 
 class Guenther:
 
-    def __init__(self, **kwargs):
-        self.logger = logging.getLogger('guenther')
+    def __init__(self, train=False, **config):
         self.lafayette = Lafayette()
         self.recognizer = sr.Recognizer()
-        self.config = Config(**kwargs)
+        self.config = Config(**config)
         self.load_samples(self.config.path.samples)
+        self.load_and_apply_blacklist(self.config.path.blacklist)
+        self.train = train
 
     def load_samples(self, sample_path):
-        self.logger.debug('Loading samples from: %s', sample_path)
+        logger.debug('Loading samples from: %s', sample_path)
         for file_path in glob('%s/*' % sample_path):
             self.load_sample(file_path)
 
     def load_sample(self, file_path):
-        self.logger.debug('Fingerprinting: %s', file_path)
+        logger.debug('Fingerprinting: %s', file_path)
         self.lafayette.fingerprint_file(file_path)
+
+    def load_and_apply_blacklist(self, blacklist_path):
+        if not Path(blacklist_path).exists():
+            logger.warning("Blacklist file does not exist")
+            return
+        logger.info('Loading blacklist from: %s', blacklist_path)
+        with open(blacklist_path, 'r') as blacklist_file:
+            count = self.lafayette.rm_hashes((l.strip() for l in blacklist_file))
+        logger.debug('Removed %s fingerprints', count)
+
+    def append_to_blacklist_and_apply(self, matches, blacklist_path):
+        with open(blacklist_path, 'a') as blacklist_file:
+            for hash_, _, _ in matches:
+                blacklist_file.write('%s\n' % hash_)
+        self.load_and_apply_blacklist(blacklist_path)
 
     def listen_forever(self, check_intervals=None):
         check_intervals = check_intervals or self.config.listen.interval
-        audio = pyaudio.PyAudio()
-
-        def open_stream():
-            return audio.open(
-                format=self.config.audio.format,
-                channels=self.config.audio.channels,
-                rate=self.config.audio.sample_rate,
-                input=True,
-                frames_per_buffer=self.config.audio.chunk_size
-            )
-        stream = open_stream()
-        loop_size = int(
-            self.config.audio.sample_rate / self.config.audio.chunk_size * check_intervals)
-        self.logger.info('Starting to LISTEN!')
         try:
-            raw_frames = io.BytesIO()
             while True:
-                raw_frames.seek(0, 0)
-                for i in range(0, loop_size):
-                    data = stream.read(self.config.audio.chunk_size)
-                    raw_frames.write(data)
-                    stuff.draw_kit(i, loop_size)
-                match = self.lafayette.match_frames(
-                        raw_frames.getvalue(),
-                        frame_rate=self.config.audio.sample_rate)
-                if match:
-                    stream.stop_stream()
-                    stream.close()
+                match = None
+                last_fingerprint_count = 0
+                with audio.mic(check_intervals, self.config.audio) as (mic_iter, loop_size):
+                    while not match:
+                        frames = io.BytesIO()
+                        for data, step in mic_iter():
+                            frames.write(data)
+                            stuff.draw_kit(step, loop_size, last_fingerprint_count)
+
+                        fingerprints = [f for f in self.lafayette.fingerprint_frames(
+                                frames.getvalue(), self.config.audio.sample_rate)]
+                        last_fingerprint_count = len(fingerprints)
+                        matches = [m for m in self.lafayette.get_matched(fingerprints)]
+                        match = self.lafayette.best_match(matches)
                     print('')  # to get a newline
-                    self.logger.info('Found match: %s', match['id'])
-                    self.handle_input(
-                        raw_frames.getvalue(),
-                        match=match
-                    )
-                    stream = open_stream()
+                    logger.info('Found match: %s', match['id'])
+                    if not self.train:
+                        self.handle_input(frames.getvalue(), match=match)
+                    else:
+                        correct = stuff.is_match_correct()
+                        if correct:
+                            new_sample = self.save_correct_match(frames)
+                            self.lafayette.fingerprint_file(new_sample)
+                        else:
+                            self.append_to_blacklist_and_apply(
+                                matches,
+                                self.config.path.blacklist
+                            )
+
         except KeyboardInterrupt:
             print('')  # to get a newline
-            self.logger.info('Stopped by user')
-        finally:
-            raw_frames.close()
-            stream.stop_stream()
-            stream.close()
-            audio.terminate()
+            logger.info('Stopped by user')
+
+    def save_correct_match(self, frames):
+        new_sample = str(Path(self.config.path.samples) / stuff.get_unique_name())
+        audio.save_frames_to_file(
+            frames.getvalue(),
+            new_sample,
+            self.config.audio
+        )
+        return new_sample
+
+    def match_callback(self):
+
+        if not self.traingin:
+            self.handle_input(frames.getvalue(), match=match)
+        else:
+            correct = stuff.is_match_correct()
+            if correct:
+                new_sample = self.save_correct_match(frames)
+                self.lafayette.fingerprint_file(new_sample)
+            else:
+                self.append_to_blacklist_and_apply(
+                    matches,
+                    self.config.path.blacklist
+                )
+
 
     def handle_input(self, frames, stream=None, match=None):
-        words = self.recognizer.recognize_ibm(
-            AudioData(frames, self.config.audio.sample_rate, self.config.audio.channels),
-            '28a8107f-63d4-4042-a935-07d74c42f59c',
-            '7eAEJYKb83fH'
+        caller = getattr(self.recognizer, 'recognize_%s' % self.config.stt.service_slug)
+        logger.info(
+            'Connection to %s with id: %s',
+            self.config.stt.service_slug,
+            self.config.stt.username
         )
-        self.logger.info('Understood words: %s', words)
+        words = caller(
+            AudioData(frames, self.config.audio.sample_rate, self.config.audio.channels),
+            self.config.stt.username,
+            self.config.stt.password
+        )
+        logger.info('Understood words: %s', words)
 
 
 def main():
-    parser = ArgumentParser()
-    parser.add_argument('--samples')
-    parser.add_argument('--listen-interval', dest='listen_interval')
-    args = parser.parse_args()
-
+    parser = ArgumentParser(
+        description='Yet another J.A.R.V.I.S / Jasper / Siri in python.'
+    )
+    parser.add_argument('--train', action='store_true')
+    parser.add_argument('--no-pp', action='store_true', dest='no_pp')
+    configure_parser(parser)
+    args = AttrDict(vars(parser.parse_args()))
     stuff.init_logging()
 
     g = Guenther(
-        sample_folder=args.samples,
-        listen_interval=args.listen_interval
+        train=args.pop('train'),
+        **args
     )
     g.listen_forever()
 

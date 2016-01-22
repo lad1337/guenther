@@ -8,6 +8,7 @@ app_dirs = AppDirs('Guenther')
 DEFAUL_CONFIG = {
     'path': {
         'config': Path(app_dirs.user_config_dir) / 'guenther.ini',
+        'blacklist': Path(app_dirs.user_config_dir) / 'blacklist.txt',
         'samples': Path(app_dirs.user_data_dir) / 'samples/',
         'rules': Path(app_dirs.user_data_dir) / 'rules/'
     },
@@ -19,13 +20,20 @@ DEFAUL_CONFIG = {
     },
     'listen':{
         'interval': (2, int)
+    },
+    'stt': {
+        'username': '',
+        'password': '',
+        'service_slug': 'ibm'
     }
 }
 
 ARGUMENT_MAP = {
-    'debug': ('server', 'debug'),
+    'debug': ('app', 'debug'),
     'config_path': ('path', 'config'),
     'rule_folder': ('path', 'rules'),
     'sample_folder': ('path', 'samples'),
-    'listen_interval': ('listen', 'interval')
+    'listen_interval': ('listen', 'interval'),
+    'stt_pw': ('stt', 'password'),
+    'stt_id': ('stt', 'username'),
 }

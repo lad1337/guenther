@@ -10,6 +10,12 @@ from .default import DEFAUL_CONFIG
 logger = logging.getLogger('guenther')
 
 
+def configure_parser(parser):
+    for argument in sorted(ARGUMENT_MAP):
+        argument_param = ('--%s' % argument).replace('_', '-')
+        parser.add_argument(argument_param, dest=argument)
+
+
 class Config(ConfigParser):
 
     def __init__(self, *args, **kwargs):

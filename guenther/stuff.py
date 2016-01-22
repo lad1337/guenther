@@ -1,9 +1,13 @@
+from uuid import uuid4
 import logging
+import signal
 
 from colorlog import ColoredFormatter
 
+logger = logging.getLogger('guenther')
+
 color_formatter = ColoredFormatter(
-        "%(log_color)s%(levelname)-8s%(reset)s%(name)-10s %(blue)s%(message)s",
+        "%(log_color)s%(levelname)-8s%(reset)s%(name)-14s %(blue)s%(message)s",
         datefmt=None,
         reset=True,
         log_colors={
@@ -28,7 +32,7 @@ def init_logging():
 going_right = 1  # 1=going right, 0=going left
 
 
-def draw_kit(step, size):
+def draw_kit(step, size, fingerprint_count):
     size = size - 1
     global going_right
     if going_right:
@@ -39,10 +43,33 @@ def draw_kit(step, size):
         right = '-' * (step + 1)
     cursor = '\x1b[31m#\x1b[0m'
     #print(cursor)
-    print('\r %s%s%s\r' % (left, cursor, right), end='', flush=True)
+    print('\r %s%s%s fp: %s\r' % (left, cursor, right, fingerprint_count), end='', flush=True)
 
     if step >= size:
         if going_right:
             going_right = 0
         else:
             going_right = 1
+
+
+def is_match_correct():
+    def interrupted(signum, frame):
+        print('')
+        logger.info('No response from user, so NO.')
+        raise TimeoutError('no response from user')
+    signal.signal(signal.SIGALRM, interrupted)
+
+    correct = False
+    print('If you say this was correct, i will add it to the test data.')
+    try:
+        signal.alarm(5)
+        input('Did you really say my name? (enter to confirm, wait to deny)')
+        correct = True
+    except TimeoutError:
+        pass
+    signal.alarm(0)
+    return correct
+
+
+def get_unique_name():
+    return '%s.wav' % uuid4()
