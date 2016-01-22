@@ -1,0 +1,7 @@
+appdirs
+attrdict
+colorlog
+cycler
+lafayette
+PyAudio
+SpeechRecognition
